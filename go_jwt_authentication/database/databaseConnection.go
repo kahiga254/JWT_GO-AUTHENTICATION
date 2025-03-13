@@ -20,23 +20,26 @@ func DBinstance() *mongo.Client {
 	}
 
 	// Get MongoDB URI
-	MongoDb := os.Getenv("MONGO_URI")
-	if MongoDb == "" {
+	MongoURI := os.Getenv("MONGO_URI")
+	if MongoURI == "" {
 		log.Fatal("MONGO_URI not found in environment variables")
 	}
+
+	// Create MongoDB client options
+	clientOptions := options.Client().ApplyURI(MongoURI)
 
 	// Create a context with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	// Connect to MongoDB
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(MongoDb))
+	client, err := mongo.Connect(ctx, clientOptions)
 	if err != nil {
 		log.Fatal("MongoDB connection error:", err)
 	}
 
 	// Verify connection
-	err = client.Ping(context.Background(), nil)
+	err = client.Ping(ctx, nil)
 	if err != nil {
 		log.Fatal("MongoDB ping error:", err)
 	}

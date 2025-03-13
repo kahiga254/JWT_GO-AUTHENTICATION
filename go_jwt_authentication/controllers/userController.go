@@ -43,10 +43,10 @@ func verifyPassword(userPassword string, providePassword string)( bool, string )
 	return check, msg
 }
 
-func Signup()gin.HandlerFunc{
-	return func(c *gin.Context){
+func Signup() gin.HandlerFunc {
+	return func(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
-		defer cancel()
+		defer cancel() // Ensure this runs at the end
 
 		var user models.User
 		if err := c.BindJSON(&user); err != nil {
@@ -54,54 +54,62 @@ func Signup()gin.HandlerFunc{
 			return
 		}
 
+		// Validate the user input
 		validationErr := validate.Struct(user)
 		if validationErr != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": validationErr.Error()})
 			return
 		}
 
-
-		_, err := userCollection.CountDocuments(ctx, bson.M{"email": user.Email})
-		defer cancel()
+		// Check if email or phone already exists in a single query
+		count, err := userCollection.CountDocuments(ctx, bson.M{"$or": []bson.M{
+			{"email": user.Email},
+			{"phone": user.Phone},
+		}})
 		if err != nil {
 			log.Panic(err)
-			c.JSON(http.StatusBadRequest, gin.H{"error": "error occured while checking for the email"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error occurred while checking for existing user"})
 			return
 		}
 
+		if count > 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Email or phone number already exists"})
+			return
+		}
+
+		// Hash password safely
+		if user.Password == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Password is required"})
+			return
+		}
 		password := HashPassword(*user.Password)
 		user.Password = &password
-		count,  err := userCollection.CountDocuments(ctx, bson.M{"phone": user.Phone})
-		defer cancel()
-		if err != nil {
-			log.Panic(err)
-			c.JSON(http.StatusBadRequest, gin.H{"error": "error occured while checking for the phone number"})
-			return
-		}
-		if count > 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "email or phone number already exists"})
-			return
-		}
 
-		user.Created_at, _= time.Parse(time.RFC3339, time.Now().Format(time.RFC3339))
-		user.Updated_at, _= time.Parse(time.RFC3339, time.Now().Format(time.RFC3339))
+		// Set timestamps and other required fields
+		now := time.Now().Format(time.RFC3339)
+		user.Created_at, _ = time.Parse(time.RFC3339, now)
+		user.Updated_at, _ = time.Parse(time.RFC3339, now)
 		user.ID = primitive.NewObjectID()
 		userId := user.ID.Hex()
-		user.User_id = &userId 
-		token, refreshToken, _ := helpers.GenerateAllTokens(*user.Email, *user.First_name, *user.Last_name , *user.User_type, *user.User_id)
+		user.User_id = &userId
+
+		// Generate tokens
+		token, refreshToken, _ := helpers.GenerateAllTokens(*user.Email, *user.First_name, *user.Last_name, *user.User_type, *user.User_id)
 		user.Token = &token
 		user.Refresh_token = &refreshToken
 
+		// Insert user into database
 		resultInsertionNumber, insertErr := userCollection.InsertOne(ctx, user)
 		if insertErr != nil {
-			msg := "User item was not created"
-			c.JSON(http.StatusInternalServerError, gin.H{"error": msg})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
 			return
 		}
-		c.JSON(http.StatusOK, resultInsertionNumber)
-	}
 
-} 
+		// Success response
+		c.JSON(http.StatusOK, gin.H{"message": "User created successfully", "user_id": userId, "inserted": resultInsertionNumber.InsertedID})
+	}
+}
+ 
 
 func Login() gin.HandlerFunc {
 	return func(c *gin.Context) {
